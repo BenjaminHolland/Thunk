@@ -1,0 +1,11 @@
+GPIO34-39 - GPI but NO OUTPUT
+GPIO6-11 - FLASH PROGRAMMING CAN'T USE
+GPIO0 - boot mode control
+GPIO2 - If high during boot, no flash.
+GPIO5 & GPIO15 - Don't use
+GPIO1 & GPIO3 - rx/tx for flashing
+
+GPIO12-15 - JTAG
+
+Truly General Pins
+

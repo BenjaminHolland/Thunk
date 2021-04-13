@@ -23,11 +23,21 @@
 #include <esp_bt_main.h>// For disabling bluetooth MORE
 #include <esp_wifi.h>   // For disabling wifi
 
+#include <TM1637Display.h>
 // Primary Display
+//#define TFT_MISO MISO
+//#define TFT_MOSI MOSI
+//#define TFT_SCLK SCK
+//#define TFT_CS    16 // Chip select control pin
+//#define TFT_DC    17  // Data Command control pin
+//#define TFT_RST   4  // Reset pin (could connect to RST pin)
 #include <TFT_eSPI.h> // Graphics and font library for ILI9341 driver chip
+
+
 #define TFT_GREY 0x5AEB // New colour
 TFT_eSPI tft = TFT_eSPI();  // Invoke library
-int tft_brightness = 128;
+int tft_brightness = 255;
+bool tft_dirty = false;
 
 // IMU - MPU6050
 #include "IMU.h"
@@ -37,6 +47,13 @@ void IRAM_ATTR imu_callback() {	// Our interrupt
 	interruptTriggered = true;
     g_imu.DetachInterrupt(); // Detach interrupt so we dont get interrupted over and over
 }
+
+// 7 Seg
+// We share the clock and use individal pins for DIO
+TM1637Display disp_top(25, 14);
+TM1637Display disp_left(25, 13);
+TM1637Display disp_bot(25, 19);
+TM1637Display disp_right(25, 33);
 
 // Speaker
 void play_tone(note_t, int, int);
@@ -63,7 +80,7 @@ void setup(){
 
     // Setup pwm pin for powering display
     ledcAttachPin(26 , 0);
-    ledcSetup(0, 4000, 8);  
+    ledcSetup(0, 4000, 8);
 
     // Lower our cpu frequency
     setCpuFrequencyMhz(40);
@@ -78,18 +95,25 @@ void setup(){
     g_imu = Thunk::IMU();
     g_imu.Initialize();
     g_imu.AttachInterrupt(imu_callback);
+
+    // 7 Segment Displays
+    disp_top.setBrightness(4);
+    disp_top.showNumberDec(1234);
+    disp_left.setBrightness(4);
+    disp_left.showNumberDec(5678);
+    disp_bot.setBrightness(4);
+    disp_bot.showNumberDec(1337);
+    disp_right.setBrightness(4);
+    disp_right.showNumberDec(8008);
 }
 
 void loop(){
-
-  // 
+  // Time gate our loop
   static uint32_t timeLast = 0;
   if (millis() - timeLast >= MAIN_LOOP_TIMESTEP)
   {
     timeLast = millis();
 
-    // Fill screen with grey so we can see the effect of printing with and without 
-    // a background colour defined
     tft.fillScreen(TFT_GREY);
     ledcWrite(0, tft_brightness);
     
