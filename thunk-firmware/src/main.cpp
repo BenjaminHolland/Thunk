@@ -16,28 +16,33 @@
     THE SOFTWARE.
 */
 
-#include <Arduino.h>    // For setup/loop and basic arduinolib funcs
-#include <SPI.h>        // SPI For primary display
-#include <Wire.h>       // I2C For MPU
-#include <esp_bt.h>     // For disabling bluetooth
-#include <esp_bt_main.h>// For disabling bluetooth MORE
-#include <esp_wifi.h>   // For disabling wifi
-
-#include <TM1637Display.h>
-// Primary Display
-//#define TFT_MISO MISO
-//#define TFT_MOSI MOSI
-//#define TFT_SCLK SCK
-//#define TFT_CS    16 // Chip select control pin
-//#define TFT_DC    17  // Data Command control pin
-//#define TFT_RST   4  // Reset pin (could connect to RST pin)
-#include <TFT_eSPI.h> // Graphics and font library for ILI9341 driver chip
+#include <Arduino.h>        // For setup/loop and basic arduinolib funcs
+#include <SPI.h>            // SPI For primary display
+#include <Wire.h>           // I2C For MPU
+#include <esp_bt.h>         // For disabling bluetooth
+#include <esp_bt_main.h>    // For disabling bluetooth MORE
+#include <esp_wifi.h>       // For disabling wifi
+#include <TM1637Display.h>  // For driving the 7-segment displays
+#include <TFT_eSPI.h>       // Graphics and font library for ILI9341 driver chip
 
 
-#define TFT_GREY 0x5AEB // New colour
 TFT_eSPI tft = TFT_eSPI();  // Invoke library
-int tft_brightness = 255;
-bool tft_dirty = false;
+
+// TFT Backlight PWM Settings
+#define TFT_PWM_BACKLIGHT_PIN 26
+#define TFT_PWM_FREQ 20000
+#define TFT_PWM_CHANNEL 2
+#define TFT_PWM_RESOLUTION 8
+const int TFT_PWM_MAX_DUTY_CYCLE = (int)(pow(2,TFT_PWM_RESOLUTION)-1);
+int tft_pwm_duty_cycle = TFT_PWM_MAX_DUTY_CYCLE;
+void tft_set_brightness( int );
+#define TFT_MAX_BRIGHTNESS 100
+#define TFT_OFF  0
+#define TFT_MEDIUM_BRIGHTNESS 60
+#define TFT_LOW_BRIGHTNESS 30
+
+// TFT Management
+bool tft_dirty = true;
 
 // IMU - MPU6050
 #include "IMU.h"
@@ -47,6 +52,8 @@ void IRAM_ATTR imu_callback() {	// Our interrupt
 	interruptTriggered = true;
     g_imu.DetachInterrupt(); // Detach interrupt so we dont get interrupted over and over
 }
+
+float last_interrupt_time = 0;
 
 // 7 Seg
 // We share the clock and use individal pins for DIO
@@ -64,7 +71,7 @@ void play_tone(note_t, int, int);
 void disable_radio();
 
 #define MAIN_LOOP_TIMESTEP 100 // Run main loop every 100ms when awake
-
+void draw();
 void setup(){
 
     // Serial
@@ -76,11 +83,13 @@ void setup(){
 
     // Primary Display
     tft.init();
-    tft.setRotation(2);
+    tft.setRotation(3);
+    draw();
 
     // Setup pwm pin for powering display
-    ledcAttachPin(26 , 0);
-    ledcSetup(0, 4000, 8);
+    ledcSetup( TFT_PWM_CHANNEL, TFT_PWM_FREQ , TFT_PWM_RESOLUTION);
+    ledcAttachPin(TFT_PWM_BACKLIGHT_PIN , TFT_PWM_CHANNEL);
+    tft_set_brightness(TFT_LOW_BRIGHTNESS);
 
     // Lower our cpu frequency
     setCpuFrequencyMhz(40);
@@ -97,48 +106,82 @@ void setup(){
     g_imu.AttachInterrupt(imu_callback);
 
     // 7 Segment Displays
-    disp_top.setBrightness(4);
+    disp_top.setBrightness(1);
     disp_top.showNumberDec(1234);
-    disp_left.setBrightness(4);
+    disp_left.setBrightness(2);
     disp_left.showNumberDec(5678);
-    disp_bot.setBrightness(4);
+    disp_bot.setBrightness(3);
     disp_bot.showNumberDec(1337);
     disp_right.setBrightness(4);
     disp_right.showNumberDec(8008);
 }
 
+void handle_imu_interrupt();
+
 void loop(){
-  // Time gate our loop
-  static uint32_t timeLast = 0;
-  if (millis() - timeLast >= MAIN_LOOP_TIMESTEP)
-  {
-    timeLast = millis();
 
-    tft.fillScreen(TFT_GREY);
-    ledcWrite(0, tft_brightness);
-    
-    // Set cursor at top with font 2
-    tft.setCursor(0, 0, 2);
-    
-    // Sample Text
-    tft.setTextColor(TFT_YELLOW); tft.setTextSize(2);
-    tft.printf("This is just some test text!");
+    // Time gate our loop
+    static uint32_t timeLast = 0;
+    if (millis() - timeLast >= MAIN_LOOP_TIMESTEP)
+    {
+        timeLast = millis();
 
+        handle_imu_interrupt();
+        draw();
+
+        // Lower the display birghtness if we havent been moved in a while.
+        if(millis() - last_interrupt_time >= 5000){
+            tft_set_brightness(TFT_MEDIUM_BRIGHTNESS);
+        }
+
+    }
+
+    ledcWrite(TFT_PWM_CHANNEL , tft_pwm_duty_cycle);
+
+}
+
+void draw(){
+    if(tft_dirty){
+        tft.fillScreen(TFT_BLACK);
+        tft.setCursor(0,0,2);
+
+        // Text
+        tft.setTextColor(TFT_YELLOW); tft.setTextSize(2);
+        tft.printf("Thunk v0.1");
+
+        tft.setCursor(0,30,2);
+        tft.printf("%d" , tft_pwm_duty_cycle);
+
+        tft_dirty = false;
+    }
+}
+
+void handle_imu_interrupt(){
     // Deal with interrupt being triggered
     if(interruptTriggered){
+        last_interrupt_time = millis();
         play_tone(note_t::NOTE_B , 2 , 250);
         interruptTriggered = false;
         Serial.print(g_imu.GetRegister(0x3A));
         Serial.print(",");
         Serial.print(g_imu.GetRegister(0x37));
-        Serial.print("\n");
+
+        tft_set_brightness(TFT_MAX_BRIGHTNESS);
 
         // We're done so re-attach interrupt
         g_imu.AttachInterrupt(imu_callback);
+        tft_dirty = true;
     }
-  }
 }
 
+/**
+ * Set tft backlight brightness/duty cycle from 0-100. Will clamp out of range values
+ */
+void tft_set_brightness(int duty_cycle){
+    if(duty_cycle > 100){ duty_cycle = 100;}
+    if(duty_cycle < 0){ duty_cycle = 0;}
+    tft_pwm_duty_cycle = ((float)duty_cycle/100.0f)*(float)TFT_PWM_MAX_DUTY_CYCLE;
+}
 
 /**
  Aggressively disables bluetooth and wifi to save power.
